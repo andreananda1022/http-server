@@ -13,8 +13,8 @@ fn handle_request(mut stream: TcpStream) -> Result<(), Box<dyn std::error::Error
         ["GET", path, "HTTP/1.1"] => {
             if path == "/" {
                 String::from("HTTP/1.1 200 OK\r\n\r\n")
-            } else if path.starts_with("/echo/") {
-                let content = path.trim_start_matches("/echo/");
+            } else if path == "/echo" || path.starts_with("/echo/") {
+                let content = path.strip_prefix("/echo/").unwrap_or("");
                 format!(
                     "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{}",
                     content.len(), content
