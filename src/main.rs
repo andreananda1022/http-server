@@ -2,7 +2,7 @@ use std::net::{
     TcpListener, TcpStream
 };
 use std::io::{
-    BufReader, BufRead, Write
+    BufReader, BufRead, Read, Write
 };
 use std::collections::HashMap;
 use std::convert::TryFrom;
@@ -15,21 +15,24 @@ struct Request {
     body: Option<String>,
 }
 
-impl TryFrom<TcpStream> for Request {
-    type Error = std::error::Error;
+impl TryFrom<&mut TcpStream> for Request {
+    type Error = Box<dyn std::error::Error>;
 
-    fn try_from(stream: TcpStream) -> Result<Self, Self::Error> {
-        let mut reader = BufReader::new(&mut stream);
+    fn try_from(stream: &mut TcpStream) -> Result<Self, Self::Error> {
+        let mut reader = BufReader::new(stream);
 
         let mut line = String::new();
         reader.read_line(&mut line)?;
 
         let request_line = line.trim_end().to_string();
-        let mut request_line_parts = request_line.split_whitespace();
+        let parts: Vec<&str> = request_line.split_whitespace().collect();
+        if parts.len() < 3 {
+            return Err("Invalid request line: incomplete format.".into());
+        }
 
-        let method = request_line_parts.next().unwrap().to_string();
-        let path = request_line_parts.next().unwrap().to_string();
-        let version = request_line_parts.next().unwrap().to_string();
+        let method = parts[0].to_string();
+        let path = parts[1].to_string();
+        let version = parts[2].to_string();
 
         let mut headers = HashMap::new();
         loop {
@@ -42,7 +45,7 @@ impl TryFrom<TcpStream> for Request {
                 break;
             }
 
-            if let Some((key, value)) = line.split_once(": ") {
+            if let Some((key, value)) = header.split_once(": ") {
                 headers.insert(key.to_string(), value.to_string());
             }
         }
@@ -53,7 +56,7 @@ impl TryFrom<TcpStream> for Request {
             .unwrap_or(0);
 
         let body = if content_length > 0 {
-            let mut buf = vec![0u8; content_length];
+            let mut buf = vec![0; content_length];
             reader.read_exact(&mut buf)?;
 
             Some(String::from_utf8_lossy(&buf).to_string())
@@ -70,7 +73,8 @@ impl TryFrom<TcpStream> for Request {
 fn handle_request(mut stream: TcpStream) -> Result<(), Box<dyn std::error::Error>> {
     println!("Accepted request from: {}", stream.peer_addr()?);
 
-    let request = Request::TryFrom(streami)?;
+    let request = Request::try_from(&mut stream)?;
+
     let response = if request.path == String::from("/") {
         String::from("HTTP/1.1 200 OK\r\n\r\n")
     } else if request.path == String::from("/echo") || request.path.starts_with("/echo/") {
@@ -80,7 +84,7 @@ fn handle_request(mut stream: TcpStream) -> Result<(), Box<dyn std::error::Error
             content.len(), content
         )
     } else if request.path == String::from("/user-agent") || request.path.starts_with("/user-agent/") {
-        let user_agent = request.headers.get("User-Agent: ")
+        let user_agent = request.headers.get("User-Agent").map(|s| s.as_str()).unwrap_or("");
 
         format!(
             "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{}",
@@ -88,7 +92,7 @@ fn handle_request(mut stream: TcpStream) -> Result<(), Box<dyn std::error::Error
         )
     } else {
         String::from("HTTP/1.1 404 Not Found\r\n\r\n")
-    }
+    };
 
     stream.write_all(response.as_bytes())?;
     stream.flush()?;
