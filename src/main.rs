@@ -75,7 +75,7 @@ fn handle_request(mut stream: TcpStream) -> Result<(), Box<dyn std::error::Error
 
     let request = Request::try_from(&mut stream)?;
 
-    let response = if request.path == String::from("/") {
+    let response = if request.path == "/" {
         String::from("HTTP/1.1 200 OK\r\n\r\n")
     } else if request.path == String::from("/echo") || request.path.starts_with("/echo/") {
         let content = request.path.strip_prefix("/echo/").unwrap_or("");
@@ -85,10 +85,44 @@ fn handle_request(mut stream: TcpStream) -> Result<(), Box<dyn std::error::Error
         )
     } else if request.path == String::from("/user-agent") || request.path.starts_with("/user-agent/") {
         let user_agent = request.headers.get("User-Agent").map(|s| s.as_str()).unwrap_or("");
-
         format!(
             "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{}",
             user_agent.len(), user_agent
+        )
+    } else if request.path == String::from("/files") || request.path.starts_with("/files/") {
+        let file_path = request.path.strip_prefix("/files/").unwrap_or("default");
+
+        let base = std::fs::canonicalize("./public")?;
+        let full_path = base.join(file_path);
+
+        let canonical = match std::fs::canonicalize(&full_path) {
+            Ok(p) => p,
+            Err(_) => {
+                stream.write_all(b"HTTP/1.1 404 Not Found\r\n\r\n")?;
+                stream.flush()?;
+                return Ok(());
+            }
+        };
+
+        if !canonical.starts_with(&base) {
+            stream.write_all(b"HTTP/1.1 403 Forbidden\r\n\r\n")?;
+            stream.flush()?;
+            return Ok(());
+        }
+
+        let body = match std::fs::read_to_string(&canonical) {
+            Ok(content) => content,
+            Err(_) => {
+                stream.write_all(b"HTTP/1.1 404 Not Found\r\n\r\n")?;
+                stream.flush()?;
+                return Ok(());
+            }
+        };
+
+        format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\n\r\n{}",
+            body.len(),
+            body
         )
     } else {
         String::from("HTTP/1.1 404 Not Found\r\n\r\n")
