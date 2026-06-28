@@ -75,22 +75,29 @@ fn handle_request(mut stream: TcpStream) -> Result<(), Box<dyn std::error::Error
 
     let request = Request::try_from(&mut stream)?;
 
-    let response = if request.path == "/" {
+    let response = if request.method == "GET" && request.path == "/" {
         String::from("HTTP/1.1 200 OK\r\n\r\n")
-    } else if request.path == String::from("/echo") || request.path.starts_with("/echo/") {
+    } else if request.method == "GET" && request.path == String::from("/echo") || request.path.starts_with("/echo/") {
         let content = request.path.strip_prefix("/echo/").unwrap_or("");
         format!(
             "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{}",
             content.len(), content
         )
-    } else if request.path == String::from("/user-agent") || request.path.starts_with("/user-agent/") {
+    } else if request.method == "GET" && request.path == "/user-agent" || request.path == "/user-agent/" {
         let user_agent = request.headers.get("User-Agent").map(|s| s.as_str()).unwrap_or("");
         format!(
             "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{}",
             user_agent.len(), user_agent
         )
-    } else if request.path == String::from("/files") || request.path.starts_with("/files/") {
-        let file_path = request.path.strip_prefix("/files/").unwrap_or("default");
+    } else if request.method == "GET" && request.path.starts_with("/files/") {
+        let file_path = match request.path.strip_prefix("/files/") {
+            Some(path) => path,
+            None => {
+                stream.write_all(b"HTTP/1.1 404 Not Found\r\n\r\n")?;
+                stream.flush()?;
+                return Ok(());
+            }
+        };
 
         let base = std::fs::canonicalize("./public")?;
         let full_path = base.join(file_path);
@@ -124,6 +131,30 @@ fn handle_request(mut stream: TcpStream) -> Result<(), Box<dyn std::error::Error
             body.len(),
             body
         )
+    } else if request.method == "POST" && request.path.starts_with("/files/") {
+        let file_name = match request.path.strip_prefix("/files/") {
+            Some(path) => path,
+            None => {
+                stream.write_all(b"HTTP/1.1 404 Not Found\r\n\r\n")?;
+                stream.flush()?;
+                return Ok(());
+            }
+        };
+
+        let base = std::fs::canonicalize("./public")?;
+        let file_path = base.join(file_name);
+
+        let body = match request.body {
+            Some(content) => content,
+            None => {
+                stream.write_all(b"HTTP/1.1 404 Not Found\r\n\r\n")?;
+                stream.flush()?;
+                return Ok(());
+            }
+        };
+
+        std::fs::write(file_path, body)?;
+        String::from("HTTP/1.1 201 Created\r\n\r\n")
     } else {
         String::from("HTTP/1.1 404 Not Found\r\n\r\n")
     };
